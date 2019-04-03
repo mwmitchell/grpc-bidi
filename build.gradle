@@ -1,0 +1,58 @@
+plugins {
+  id 'java'
+  id 'application'
+  id "com.google.protobuf" version "0.8.8"
+}
+
+def generatedProtoPath = "$projectDir/src/generated";
+
+protobuf {
+  protoc {
+    // The version of protoc must match protobuf-java. If you don't depend on
+    // protobuf-java directly, you will be transitively depending on the
+    // protobuf-java version that grpc depends on.
+    artifact = "com.google.protobuf:protoc:3.6.0"
+  }
+  plugins {
+    grpc {
+      artifact = 'io.grpc:protoc-gen-grpc-java:1.19.0'
+    }
+  }
+  generateProtoTasks {
+    all()*.plugins {
+      grpc {}
+    }
+  }
+  generatedFilesBaseDir = generatedProtoPath
+}
+
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
+repositories {
+  jcenter()
+}
+
+sourceSets.main.java.srcDir generatedProtoPath
+
+dependencies {
+  implementation group: 'io.grpc', name: 'grpc-netty', version: '1.19.0'
+  implementation group: 'io.grpc', name: 'grpc-protobuf', version: '1.19.0'
+  implementation group: 'io.grpc', name: 'grpc-stub', version: '1.19.0'
+  implementation "ch.qos.logback:logback-classic:1.2.3"
+  implementation 'com.google.guava:guava:26.0-jre'
+  testImplementation 'junit:junit:4.12'
+}
+
+// Define the main class for the application
+mainClassName = 'foo.bar.Server'
+
+jar {
+  manifest {
+    attributes "Main-Class": "$mainClassName"
+  }
+
+  from {
+    configurations.compileClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+  }
+}

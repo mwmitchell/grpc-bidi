@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package foo.bar;
+
+option java_multiple_files = true;
+option java_package = "foo.bar";
+option java_outer_classname = "FooBarProto";
+
+service FooBarService {
+  rpc connect (stream ClientMessage) returns (stream ServerMessage) {}
+}
+
+message ClientConnect {
+  string cid = 1;
+}
+
+message StreamBegin {
+  string sid = 1;
+}
+
+message StreamItem {
+  string sid = 1;
+}
+
+message StreamEnd {
+  string sid = 1;
+}
+
+message ClientStream {
+  oneof stream {
+    StreamBegin begin = 1;
+    StreamItem item = 2;
+    StreamEnd end = 3;
+  }
+}
+
+message ClientMessage {
+  oneof msg {
+    ClientConnect connect = 1;
+    ClientStream stream = 2;
+  }
+}
+
+message ServerConnectReply {
+
+}
+
+message ServerStreamRequest {
+  int32 numItems = 1;
+}
+
+message ServerMessage {
+  oneof msg {
+    ServerConnectReply connectReply = 1;
+    ServerStreamRequest streamRequest = 2;
+  }
+}
