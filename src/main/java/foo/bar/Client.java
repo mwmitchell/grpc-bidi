@@ -32,10 +32,17 @@ public class Client {
 
   static final Logger logger = LoggerFactory.getLogger(Client.class.getName());
 
-  private static final AtomicLong requestCount = new AtomicLong();
+  // Value used for deciding what kind of blocking call to simulate
+  private static final AtomicLong blockingCallStep = new AtomicLong();
+  // Counter to track IO calls (currently blocking only, via http request)
   private static final AtomicLong ioCount = new AtomicLong();
-  private static final AtomicLong maxBlockingThreads = new AtomicLong();
+  // 
+  private static final AtomicLong blockingThreadCount = new AtomicLong();
+  private static final int maxBlockingThreads = 3;
 
+  /**
+   ** Simulate CPU work...
+   */
   private static void spin(int milliseconds) {
     long sleepTime = milliseconds * 1000000L; // convert to nanoseconds
     long startTime = System.nanoTime();
@@ -43,13 +50,14 @@ public class Client {
   }
 
   private static void doBlockingWork() {
-    if (maxBlockingThreads.getAndIncrement() < 3) {
+    // Limit blocking to just `maxBlockingThreads` threads
+    if (blockingThreadCount.getAndIncrement() < maxBlockingThreads) {
+      // Limit the IO call to just 1 thread
       if (ioCount.getAndIncrement() == 0) {
-        logger.info("sleeper thread doing work...");
-        //spin(10000);
+        logger.info("IO thread...");
         try {
-          URL oracle = new URL("-->> url-of-a-very-large-file-here <<--");
-          URLConnection yc = oracle.openConnection();
+          URL url = new URL("-->> url-of-a-very-large-file-here <<--");
+          URLConnection yc = url.openConnection();
           try (BufferedReader in = new BufferedReader(new InputStreamReader(yc.getInputStream()))) {
             String inputLine;
             int i;
@@ -59,22 +67,25 @@ public class Client {
             }
           }
         } catch (Exception e) {
-          logger.info("http error!");
+          logger.error("http error!", e);
         }
-      } else if (requestCount.getAndIncrement() == 1) {
+      // 
+      } else if (blockingCallStep.getAndIncrement() == 1) {
+        logger.info("sleeper thread...");
         try {
           Thread.sleep(5_000);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
           throw new RuntimeException(e);
         }
-      } else if (requestCount.get() == 2) {
+      } else if (blockingCallStep.get() == 2) {
+        logger.info("CPU thread...");
         spin(20_000);
       } else {
-        requestCount.set(0);
+        blockingCallStep.set(0);
       }
     } else {
-      maxBlockingThreads.set(0);
+      blockingThreadCount.set(0);
     }
   }
 
@@ -85,13 +96,21 @@ public class Client {
         //.executor(Executors.newFixedThreadPool(4, new ThreadFactoryBuilder().setNameFormat("ch-%d").build()))
         .build();
 
+    // num of concurrent/bidirectional client calls
     int numConnectStreams = 5;
-    ExecutorService executor = Executors.newFixedThreadPool(numConnectStreams, new ThreadFactoryBuilder().setNameFormat("app-%d").build());
+    ExecutorService executor = Executors.newFixedThreadPool(
+      numConnectStreams,
+      new ThreadFactoryBuilder().setNameFormat("app-%d").build()
+    );
 
     foo.bar.FooBarServiceGrpc.FooBarServiceStub stub = foo.bar.FooBarServiceGrpc.newStub(ch).withExecutor(new ForkJoinPool(4));
+    // Experimenting with using a BlockingQueue of StreamObservers - this can be thought of as a "pool",
+    // in which each thread takes, does work on the SO, then puts back onto the queue, because SO's are not thread safe.
+    // Idea here is similar to a circular queue or ring buffer.
     BlockingQueue<StreamObserver<foo.bar.ClientMessage>> streams = Queues.newArrayBlockingQueue(numConnectStreams);
+    // A queue of messages received from the server
     BlockingQueue<foo.bar.ServerMessage> serverMessages = Queues.newArrayBlockingQueue(100_000);
-    BlockingQueue<foo.bar.ClientMessage> clientMessages = Queues.newArrayBlockingQueue(100_000);
+    // BlockingQueue<foo.bar.ClientMessage> clientMessages = Queues.newArrayBlockingQueue(100_000);
 
     Runnable startWorkerTask = () -> {
       executor.submit(() -> {
@@ -107,29 +126,27 @@ public class Client {
         //
         //doBlockingWork();
         try {
-          StreamObserver<foo.bar.ClientMessage> requestStream = streams.take();
+          StreamObserver<foo.bar.ClientMessage> requestStream1 = streams.take();
           foo.bar.ServerStreamRequest serverStreamRequest = serverMessage.getStreamRequest();
           String sid = UUID.randomUUID().toString();
           foo.bar.ClientMessage m = newStreamBeginMessage(sid);
-          requestStream.onNext(m);
-          streams.add(requestStream);
+          requestStream1.onNext(m);
+          streams.add(requestStream1);
           //
           IntStream.range(0, serverStreamRequest.getNumItems()).forEach(i -> {
-            StreamObserver<foo.bar.ClientMessage> s1;
+            StreamObserver<foo.bar.ClientMessage> requestStream2;
             try {
-              s1 = streams.take();
-              s1.onNext(newStreamItem(sid));
-              streams.add(s1);
-              //requestStream.onNext(newStreamItem(sid));
+              requestStream2 = streams.take();
+              requestStream2.onNext(newStreamItem(sid));
+              streams.add(requestStream2);
             } catch (InterruptedException e) {
               Thread.currentThread().interrupt();
               throw new RuntimeException(e);
             }
           });
-          StreamObserver<foo.bar.ClientMessage> s = streams.take();
-          //requestStream.onNext(newStreamEndMessage(sid));
+          StreamObserver<foo.bar.ClientMessage> requestStream3 = streams.take();
           s.onNext(newStreamEndMessage(sid));
-          streams.add(s);
+          streams.add(requestStream3);
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
         }
