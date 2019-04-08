@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.concurrent.ForkJoinPool;
 
 public class Server {
 
@@ -27,6 +28,7 @@ public class Server {
 
     server = ServerBuilder.forPort(port)
         .addService(new FooBarServiceImpl())
+        .executor(new ForkJoinPool(20))
         .build()
         .start();
 

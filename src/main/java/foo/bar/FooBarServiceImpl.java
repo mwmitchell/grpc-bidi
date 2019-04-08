@@ -1,29 +1,24 @@
 package foo.bar;
 
 import com.google.common.base.Throwables;
-import com.google.common.util.concurrent.MoreExecutors;
 import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class FooBarServiceImpl extends foo.bar.FooBarServiceGrpc.FooBarServiceImplBase {
 
   ConcurrentMap<String, ClientCallHandler> clients = new ConcurrentHashMap<>();
 
-  static Instant startTime = Instant.now();
+  static long startTime = System.nanoTime();
   static AtomicLong clientMessageCount = new AtomicLong();
 
   @Override
@@ -41,7 +36,6 @@ public class FooBarServiceImpl extends foo.bar.FooBarServiceGrpc.FooBarServiceIm
 
     private final ServerCallStreamObserver<foo.bar.ServerMessage> serverCallStreamObserver;
     private final ConcurrentMap<String, ClientCallHandler> clientRegistry;
-    private final AtomicReference<ScheduledExecutorService> schedulerRef = new AtomicReference<>();
     private String clientId;
     private final AtomicBoolean wasReady = new AtomicBoolean();
 
@@ -62,17 +56,19 @@ public class FooBarServiceImpl extends foo.bar.FooBarServiceGrpc.FooBarServiceIm
     private void sendStreamRequest() {
       serverCallStreamObserver.onNext(foo.bar.ServerMessage.newBuilder()
           .setStreamRequest(foo.bar.ServerStreamRequest.newBuilder()
-              .setNumItems(ThreadLocalRandom.current().nextInt(0, 1000)).build())
+              .setNumItems(ThreadLocalRandom.current().nextInt(0, 10000)).build())
           .build());
     }
 
     @Override
     public void onNext(foo.bar.ClientMessage value) {
-      clientMessageCount.incrementAndGet();
-      logger.info(
-          "Received call-number={}, running-time={}",
-          clientMessageCount.get(),
-          Duration.between(startTime, Instant.now()).toMillis());
+      long current = clientMessageCount.incrementAndGet();
+      long diff = System.nanoTime() - startTime;
+      long diffSeconds = TimeUnit.SECONDS.convert(diff, TimeUnit.NANOSECONDS);
+      if(current >= 10_000_000){
+        logger.info("Received call-number={}, running-time={} avgPerSec={}", current, diffSeconds, (current/diffSeconds));
+        throw new RuntimeException("done!");
+      }
       switch (value.getMsgCase()) {
         case CONNECT:
           handleConnect(value);
@@ -118,17 +114,13 @@ public class FooBarServiceImpl extends foo.bar.FooBarServiceGrpc.FooBarServiceIm
 
     @Override
     public void onError(Throwable t) {
-      serverCallStreamObserver.onError(t);
       logger.error("Client Error: {} / {}", clientId, Throwables.getStackTraceAsString(t));
-      MoreExecutors.shutdownAndAwaitTermination(schedulerRef.get(), 1, TimeUnit.SECONDS);
       clientRegistry.remove(clientId);
     }
 
     @Override
     public void onCompleted() {
-      serverCallStreamObserver.onCompleted();
       logger.info("Client Completed: {}", clientId);
-      MoreExecutors.shutdownAndAwaitTermination(schedulerRef.get(), 1, TimeUnit.SECONDS);
       clientRegistry.remove(clientId);
     }
   }
